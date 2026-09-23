@@ -196,6 +196,13 @@ local CONFIGURATION = {
         -- surrounding book text (default off; requires the prompt's use_book_context).
         -- Built-in defaults: use_book_context = true only for explain, historical_context, summarize, key_points, ELI5;
         -- false for translate, vocabulary, grammar, wikipedia, simplify, term_xray, dictionary, quick_note and others.
+        -- Per-prompt `use_sentence_context = true`: attach the previous sentence and the sentence containing the selection.
+        -- Overrides use_book_context, nearby page text and Attach Prior Text, independently of global settings.
+        -- Starting this prompt in a conversation clears earlier turns so their broader context is not sent.
+        -- {highlight} remains the selected word/text. Explicit placeholders such as {title} still expand.
+        -- Sentence boundaries use punctuation (including CJK); abbreviations can be ambiguous.
+        -- If context is unavailable (e.g. PDF) or exceeds the extraction limit, send only the selection.
+        -- Multi-sentence selections retain the selected text and its enclosing sentence boundaries.
         -- Per-prompt override `show_suggestions = true/false` -- whether to append follow-up questions after this prompt (requires global Show Follow-up Questions enabled).
         -- Built-in defaults: show_suggestions = true only for key_points, ELI5, explain, historical_context, wikipedia;
         -- false for vocabulary, grammar, translate, summarize, simplify, dictionary, quick_note, term_xray.
@@ -207,6 +214,14 @@ local CONFIGURATION = {
             --
             -- example of adding a user-defined prompt:
             -- myprompt = { text ="Prompt Title", system_prompt = "you are a helpful assistant.", user_prompt = "describe the following text in detail: {highlight}", order = 50, show_on_main_popup = true, },
+            -- sentence_lookup = {
+            --     text = "Word in This Sentence",
+            --     user_prompt = "Explain the meaning of {highlight} in the provided sentence. Answer in {language}.",
+            --     use_sentence_context = true,
+            --     order = 50,
+            --     show_on_main_popup = true,
+            --     show_on_dictionary_popup = true,
+            -- },
 
         },
 
