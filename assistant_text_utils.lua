@@ -17,6 +17,20 @@ local M = {}
 -- rather than a phrase; only a runaway selection is cut.
 local HIGHLIGHT_CAPTION_MAX = 500
 
+-- Chat bubble widths by turn length (see assistant_css): an action label
+-- alone hugs the right edge, a one-liner keeps the chat shape, and anything
+-- longer takes the page. MuPDF has no max-width, so this decides how much of
+-- the page a user bubble may use. Counted in codepoints, an approximation:
+-- glyph widths vary with the script.
+local BUBBLE_TINY_MAX = 18
+local BUBBLE_SHORT_MAX = 40
+
+-- Collapse whitespace runs to single spaces, then trim. A chat caption is one
+-- line, and a blank line inside a raw HTML block would end the block.
+local function flatten_whitespace(text)
+    return (text:gsub("%s+", " ")):match("^%s*(.-)%s*$")
+end
+
 --- Convert a getPageText() result (string or table-of-blocks) into a plain string.
 --- Mirrors the table handling used in extractBookTextForAnalysis.
 --- @param t string|table|nil getPageText() result
@@ -50,6 +64,17 @@ local function utf8_char_len(byte)
   if byte < 0xF0 then return 3 end
   if byte < 0xF8 then return 4 end
   return 0
+end
+
+-- Codepoints in text, for the chat-length test (see BUBBLE_SHORT_MAX).
+local function utf8_length(text)
+    local count, i = 0, 1
+    while i <= #text do
+        local len = utf8_char_len(text:byte(i))
+        i = i + (len > 0 and len or 1)
+        count = count + 1
+    end
+    return count
 end
 
 --- Keep the tail of text within max_len bytes on a UTF-8 boundary.
@@ -271,9 +296,8 @@ end
 --- @return string caption suffix (leading space included), "" when there is nothing to append
 function M.caption_highlight(text)
     if type(text) ~= "string" then return "" end
-    -- Collapse runs of whitespace, then trim: a selection that is only
-    -- whitespace leaves nothing to caption.
-    local flat = (text:gsub("%s+", " ")):match("^%s*(.-)%s*$")
+    -- A selection that is only whitespace leaves nothing to caption.
+    local flat = flatten_whitespace(text)
     if flat == "" then return "" end
     if #flat > HIGHLIGHT_CAPTION_MAX then
         flat = M.truncateToHeadUtf8Safe(flat, HIGHLIGHT_CAPTION_MAX - 3) .. "..."
@@ -717,15 +741,49 @@ function M.formatSingleMessage(message_history, message, opts)
         if not (title and title ~= "") and not body then
             return ""
         end
+        local selection = ASUtils.get_attr(message, "highlight_text")
+        if type(selection) ~= "string" then selection = nil end
+        -- The Show Highlighted Text switch moves the selection out of the
+        -- caption into its own block, so the bubble stops repeating it.
+        local show_source = opts.settings
+            and opts.settings:readSetting("show_source_text", false)
+
         -- The angle quotes are non-ASCII, so they ride outside _().
-        local caption, meta = "", ""
+        local caption, meta, source = "", "", ""
+        local caption_selection = ""
         if title and title ~= "" then
+            if not show_source then
+                caption_selection = M.caption_highlight(selection)
+            end
             caption = T('<div class="user-bubble-title">‹ %1 ›%2</div>\n',
-                title, M.caption_highlight(ASUtils.get_attr(message, "highlight_text")))
+                title, caption_selection)
             -- Markup built by the dialog.
             meta = ASUtils.get_attr(message, "bubble_meta") or ""
         end
-        return T('<div class="user-bubble">%1%2%3</div>\n\n', caption, meta, body or "")
+        if show_source and selection then
+            -- Raw selection text: escape it, and flatten it, since a blank line
+            -- inside a raw HTML block would end the block.
+            local flat = flatten_whitespace(selection)
+            if flat ~= "" then
+                source = T('<div class="source-text">%1</div>\n',
+                    T('<b>%1</b> %2', _("Highlighted text:"),
+                        util.htmlEscape(flat)))
+            end
+        end
+        -- Width by turn length: an action label alone hugs the right edge, a
+        -- one-liner keeps the chat shape, a longer turn gets the page. The
+        -- meta block counts too: a bubble carrying title/author lines is not
+        -- an action label, whatever its caption says.
+        local visible_len = utf8_length(title or "") + utf8_length(caption_selection)
+            + utf8_length(body or "") + utf8_length((meta:gsub("<[^>]*>", " ")))
+        local bubble_class = "user-bubble tiny-text"
+        if visible_len > BUBBLE_SHORT_MAX then
+            bubble_class = "user-bubble long-text"
+        elseif visible_len > BUBBLE_TINY_MAX then
+            bubble_class = "user-bubble short-text"
+        end
+        return T('%1<div class="%2">%3%4%5</div>\n\n',
+            source, bubble_class, caption, meta, body or "")
     elseif message.role == "assistant" then
         local assistant_content, reasoning_section
         local kw = ASUtils.get_attr(message, "search_keywords")
