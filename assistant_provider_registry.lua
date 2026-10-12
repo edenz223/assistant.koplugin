@@ -140,6 +140,32 @@ end
 -- Exposed for unit tests (pure formatting, no UI state).
 Registry.formatTestSuccess = formatTestSuccess
 
+--- Reasoning-options test result text: verdict plus the evidence needed to
+--- judge the tested options - the reasoning text and the full model reply,
+--- always both, so a reasoning option stays judgeable even with the reasoning
+--- display switch off. Missing halves are marked, never dropped. Pure (no UI)
+--- so tests can pin it.
+--- @param content string|nil extracted assistant text
+--- @param reasoning string|nil extracted reasoning text
+--- @return string
+local function formatReasoningTestSuccess(content, reasoning)
+    local function evidence(value)
+        if type(value) ~= "string" or value:find("%S") == nil then
+            return _("(none)")
+        end
+        return value
+    end
+    return table.concat({
+        _("Connection test successful."),
+        "",
+        TextUtils.bold_format(T(_("<b>Reasoning:</b> %1"), evidence(reasoning))),
+        "",
+        TextUtils.bold_format(T(_("<b>Model reply:</b> %1"), evidence(content))),
+    }, "\n")
+end
+-- Exposed for unit tests (pure formatting, no UI state).
+Registry.formatReasoningTestSuccess = formatReasoningTestSuccess
+
 --- Connection-test verdict: HTTP 2xx plus a non-empty extracted answer.
 --- Echoing OK is not required - any non-whitespace content proves the
 --- connection. Pure (no UI) so tests can pin the pass condition; extraction
@@ -154,26 +180,19 @@ end
 -- Exposed for unit tests (pure verdict, no UI state).
 Registry.isConnectionTestOk = isConnectionTestOk
 
---- Run a connection test against a provider configuration and report the
---- result. Owns the online check and the Trapper wrap so callers are
---- one-liners. Uses a throwaway handler instance (same pattern as
---- model_picker.fetchModels) so the live provider singleton is never mutated;
---- the request runs in a dismissable subprocess behind an InfoMessage. The
---- API key is never displayed.
---- @param handler_name string API handler name (e.g. "openai", "gemini")
---- @param base_url string   provider base URL as entered by the user
---- @param api_key string    provider API key
---- @param model string      model id to test against
-function Registry.testConnection(handler_name, base_url, api_key, model)
+--- Run tester:Test() and show the outcome: a dismissable success InfoMessage,
+--- or the full failure dump for anything else. Owns the online check and the
+--- Trapper wrap so callers stay one-liners. The API key is never displayed.
+--- @param handler_name string API handler name, for the failure report
+--- @param base_url string provider base URL, for the failure report
+--- @param model string model id, for the failure report
+--- @param tester table throwaway handler instance, ready to run Test()
+--- @param format_success function|nil report -> success text; defaults to
+---        the terse formatTestSuccess(report.content)
+--- @return nil
+local function runConnectionTest(handler_name, base_url, model, tester, format_success)
     NetUtils.runWhenOnlineFast(function()
         Trapper:wrap(function()
-            local handler_module = require("api_handlers." .. handler_name)
-            local tester = handler_module:new{
-                base_url = base_url,
-                api_key  = api_key,
-                model    = model,
-            }
-            tester:normalizeBaseUrl()
             -- testRequest() owns the dismissable "Testing connection..."
             -- InfoMessage (shows the exact POST endpoint, tap to cancel).
             local report, err = tester:Test()
@@ -191,9 +210,11 @@ function Registry.testConnection(handler_name, base_url, api_key, model)
             if isConnectionTestOk(report) then
                 -- Success stays on screen until acknowledged (the user ran a
                 -- test and is waiting on its result).
+                local text = format_success and format_success(report)
+                    or formatTestSuccess(report.content)
                 UIManager:show(InfoMessage:new{
                     face = Font:getFace("xx_smallinfofont"),
-                    text = formatTestSuccess(report.content),
+                    text = text,
                 })
             else
                 -- Failure: full dump (parameters, request, raw API error body)
@@ -205,6 +226,63 @@ function Registry.testConnection(handler_name, base_url, api_key, model)
                 })
             end
         end)
+    end)
+end
+
+--- Run a connection test against a provider configuration and report the
+--- result. Uses a throwaway handler instance (same pattern as
+--- model_picker.fetchModels) so the live provider singleton is never mutated;
+--- the request runs in a dismissable subprocess behind an InfoMessage.
+--- @param handler_name string API handler name (e.g. "openai", "gemini")
+--- @param base_url string   provider base URL as entered by the user
+--- @param api_key string    provider API key
+--- @param model string      model id to test against
+function Registry.testConnection(handler_name, base_url, api_key, model)
+    local handler_module = require("api_handlers." .. handler_name)
+    local tester = handler_module:new{
+        base_url = base_url,
+        api_key  = api_key,
+        model    = model,
+    }
+    tester:normalizeBaseUrl()
+    runConnectionTest(handler_name, base_url, model, tester, nil)
+end
+
+--- Run a connection test with a not-yet-saved reasoning overlay applied, so
+--- the options checked in the Reasoning Options dialog can be probed against
+--- the model before anything is persisted; the stored overlay is never
+--- touched. The throwaway handler is synced exactly like the live one (model
+--- preset, shared parameters, then the overlay under test), and the success
+--- report keeps the reasoning text and the full model reply visible.
+--- @param assistant table the Assistant instance
+--- @param provider_id string provider key (file key or UI "custom:N")
+--- @param overlay table reasoning overlay built from the dialog checkboxes
+function Registry.testReasoningOptions(assistant, provider_id, overlay)
+    local ps = assistant.config:getProvider(provider_id)
+    if not ps then return end
+    -- Same handler resolution as Querier:load_model: explicit field first,
+    -- provider-key prefix as the fallback for file providers.
+    local handler_name = koutil.tableGetValue(ps, "handler")
+        or tostring(provider_id):match("^([^_]+)")
+        or "openai"
+    local ok_mod, handler_module = pcall(require, "api_handlers." .. handler_name)
+    if not ok_mod then
+        UIManager:show(InfoMessage:new{
+            icon = "notice-warning",
+            face = Font:getFace("xx_smallinfofont"),
+            text = T(_("Handler %1 not available for provider: %2"), handler_name, provider_id),
+        })
+        return
+    end
+    local tester = handler_module:new{}
+    tester:SyncOptions({
+        provider_name = provider_id,
+        handler_name = handler_name,
+        provider_setting = koutil.tableDeepCopy(ps),
+        settings = assistant.settings,
+    }, overlay)
+    runConnectionTest(handler_name, tester.base_url, tester.model, tester, function(report)
+        return formatReasoningTestSuccess(report.content, report.reasoning)
     end)
 end
 
@@ -611,43 +689,56 @@ end
 -- Per-handler reasoning presets ("dialects"): each entry carries that
 -- platform's exact parameter shape. Selections live in a runtime overlay
 -- (settings key "reasoning_option_<id>"), merged over the base config in
--- BaseHandler:SyncOptions. All presets disable reasoning except Anthropic,
--- where thinking is opt-in.
--- NOTE: desc strings are intentionally not _()-wrapped — platform names and
--- verbatim parameter names, nothing worth translating.
+-- BaseHandler:SyncOptions. Graded keys offer a "none" (reasoning off) and a
+-- "low" (minimal reasoning) preset; boolean-only dialects offer their "none"
+-- (off) preset alone - they have no low level to offer.
+-- NOTE: desc strings are intentionally not _()-wrapped — verbatim parameter
+-- names and values only, nothing worth translating.
 Registry.PARAM_CATALOG = {
     openai = {
         { key = "reasoning_effort", value = "none",
-          desc = "OpenAI/xAI: reasoning_effort = none" },
+          desc = "reasoning_effort = none" },
         { key = "reasoning_effort", value = "low",
-          desc = "GLM: reasoning_effort = low" },
+          desc = "reasoning_effort = low" },
         { key = "thinking", value = { type = "disabled" },
-          desc = "DeepSeek: thinking = {type = disabled}" },
+          desc = "thinking = {type = disabled}" },
         { key = "enable_thinking", value = false,
-          desc = "Qwen: enable_thinking = false" },
+          desc = "enable_thinking = false" },
         { key = "think", value = false,
-          desc = "Ollama: think = false" },
+          desc = "think = false" },
         { key = "reasoning", value = { effort = "none" },
-          desc = "OpenRouter: reasoning = {effort = none}" },
+          desc = "reasoning = {effort = none}" },
+        { key = "reasoning", value = { effort = "low" },
+          desc = "reasoning = {effort = low}" },
     },
     responses = {
         { key = "reasoning", value = { effort = "none" },
-          desc = "Responses: reasoning = {effort = none}" },
+          desc = "reasoning = {effort = none}" },
+        { key = "reasoning", value = { effort = "low" },
+          desc = "reasoning = {effort = low}" },
     },
     anthropic = {
-        { key = "thinking", value = { type = "enabled", budget_tokens = 10240 },
-          desc = "Anthropic: thinking = {type = enabled, budget_tokens = 10240} (must be < max_tokens)" },
         { key = "thinking", value = { type = "disabled" },
-          desc = "Anthropic: thinking = {type = disabled}" },
+          desc = "thinking = {type = disabled}" },
+        { key = "thinking", value = { type = "enabled", budget_tokens = 1024 },
+          desc = "thinking = {type = enabled, budget_tokens = 1024} (must be < max_tokens)" },
+        { key = "thinking", value = { type = "enabled", budget_tokens = 10240 },
+          desc = "thinking = {type = enabled, budget_tokens = 10240} (must be < max_tokens)" },
     },
     gemini = {
-        -- Independent options per series — pick one, not both: thinking_budget
-        -- for 2.5 (0 disables thinking), thinkingConfig for Gemini 3 / Gemma-4
-        -- (minimal minimizes thinking; 3+ cannot fully disable it).
+        -- Independent parameter shapes — pick the one the model accepts:
+        -- thinking_budget takes a token count (0 disables thinking);
+        -- thinkingConfig takes a thinking level. Level-based models cannot
+        -- always disable thinking, so their lowest level is the practical
+        -- "none" and the next level up is "low".
         { key = "thinking_budget", value = 0,
-          desc = "Gemini(2.5): thinkingBudget = 0" },
+          desc = "thinking_budget = 0" },
+        { key = "thinking_budget", value = 1024,
+          desc = "thinking_budget = 1024" },
         { key = "thinkingConfig", value = { thinkingLevel = "minimal" },
-          desc = "Gemini(3/Gemma-4): thinkingLevel = minimal" },
+          desc = "thinkingConfig = {thinkingLevel = minimal}" },
+        { key = "thinkingConfig", value = { thinkingLevel = "low" },
+          desc = "thinkingConfig = {thinkingLevel = low}" },
     },
 }
 
@@ -746,6 +837,8 @@ end
 --- same-name additional_parameters keys in BaseHandler:SyncOptions;
 --- configuration values stay untouched. Checked state reflects the overlay
 --- (not the effective/base parameters) so save/load round-trips stably.
+--- The Test button probes the checked options against the model without
+--- saving anything; only OK persists the overlay.
 ---@param assistant table The Assistant instance
 ---@param provider_id string The provider ID (file key or UI "custom:N")
 ---@return table|nil dialog The shown dialog widget, or nil when the provider
@@ -778,10 +871,32 @@ function Registry.showParametersDialog(assistant, provider_id)
     -- callback closes over it, and a later local would instead resolve
     -- as a nil global inside the callback.
     local checkboxes = {}
+    -- Checked state as it stands right now: later catalog entries win for
+    -- same-name keys, matching how SyncOptions merges the overlay. Both the
+    -- Test probe and the OK save read the dialog through this builder.
+    local function buildOverlay()
+        local overlay = {}
+        for i, item in ipairs(catalog) do
+            if checkboxes[i].checked then
+                overlay[item.key] = koutil.tableDeepCopy(item.value)
+            end
+        end
+        return overlay
+    end
     local buttons = {{
         {
             text = _("Cancel"),
             callback = function() UIManager:close(dialog) end,
+        },
+        {
+                id = "test",
+                text = _("Test"),
+                callback = function()
+                    -- Probe the checked options against the model as they are:
+                    -- nothing is written to settings until OK is tapped, and
+                    -- the dialog stays open for further adjustments.
+                    Registry.testReasoningOptions(assistant, provider_id, buildOverlay())
+                end,
         },
         {
                 id = "ok",
@@ -790,12 +905,7 @@ function Registry.showParametersDialog(assistant, provider_id)
                     -- Runtime overlay only: never touches ui_providers or
                     -- configuration.lua. Only selected catalog entries are
                     -- stored; unselected entries simply leave the base values.
-                    local overlay = {}
-                    for i, item in ipairs(catalog) do
-                        if checkboxes[i].checked then
-                            overlay[item.key] = koutil.tableDeepCopy(item.value)
-                        end
-                    end
+                    local overlay = buildOverlay()
                     local key = Registry.getReasoningKey(provider_id)
                     if next(overlay) == nil then
                         assistant.settings:delSetting(key)
@@ -855,7 +965,7 @@ function Registry.showParametersDialog(assistant, provider_id)
             margin = Size.margin.small,
             bordersize = 0,
             TextBoxWidget:new{
-                text = TextUtils.bold_format(_("Generally do <b>NOT</b> select more than one - pick a parameter that matches your model and platform. A wrong parameter may cause API errors. \n\nSelected value overrides additional_parameters of configuration.")),
+                text = TextUtils.bold_format(_("Generally do <b>NOT</b> select more than one - pick a parameter that matches your model and platform. A wrong parameter may cause API errors. \n\nSelected value overrides additional_parameters of configuration. If selected options share the same key, only the last one in the list is used.")),
                 face = Font:getFace("xx_smallinfofont"),
                 width = inner_width,
             },
