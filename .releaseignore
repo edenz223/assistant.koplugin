@@ -22,3 +22,7 @@ l10n/**/*.pot
 l10n/**/ai_note.txt
 # Per-locale LLM review notes (review_translations.py opt-in): tooling input, not shipped
 l10n/**/review_note.txt
+
+# User-owned credentials must never ship in ZIP or source OTA installs.
+configuration.lua
+apikeys.lua

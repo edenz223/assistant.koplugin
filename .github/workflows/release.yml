@@ -1,70 +1,79 @@
-# This is a GitHub Action workflow to automate the release process.
-# For more information about GitHub Actions, see: https://docs.github.com/en/actions
+name: Maintain and Release
 
-name: Create Release
-
-# Controls when the workflow will run.
 on:
-  # Triggers the workflow on push events, but only for tags that start with 'v'.
-  # For example: v1.0, v1.2.3, v2.0-beta
   push:
-    tags:
-      - 'v*'
+    branches: [main]
+  schedule:
+    - cron: '0 1 * * *'
   workflow_dispatch:
 
-# A workflow run is made up of one or more jobs that can run sequentially or in parallel.
+permissions:
+  contents: write
+
+concurrency:
+  group: main-maintenance
+  cancel-in-progress: false
+
 jobs:
-  # This workflow contains a single job called "build_and_release".
-  build_and_release:
-    # The type of runner that the job will run on.
-    runs-on: ubuntu-latest
-    # Grant permissions for the GITHUB_TOKEN to create a release.
-    permissions:
-      contents: write
+  maintain:
+    if: github.repository == 'edenz223/assistant.koplugin' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
     env:
-      PACKAGE_NAME: assistant.koplugin
-      ARCHIVE_NAME: assistant.koplugin-${{ github.ref_name }}.zip
-
-    # Steps represent a sequence of tasks that will be executed as part of the job.
+      GH_TOKEN: ${{ github.token }}
     steps:
-      # Step 1: Check out your repository under $GITHUB_WORKSPACE, so your job can access it.
-      - name: Checkout code
-        uses: actions/checkout@v5
-
-      # Step 2: Create the directory structure and archive the project source into a zip file.
-      # Unified exclusion via .releaseignore; CI uses zip -x@exclude.list.
-      - name: Archive project source with zip
-        run: |
-          # PACKAGE_NAME/ARCHIVE_NAME from job env, re-export for shell
-          PACKAGE_NAME="$PACKAGE_NAME"
-          ARCHIVE_NAME="$ARCHIVE_NAME"
-          echo "Building release archive from .releaseignore..."
-          if [ -f .releaseignore ]; then cat .releaseignore; echo "---"; else echo "WARNING: .releaseignore missing"; fi
-          rm -rf "$PACKAGE_NAME" "$ARCHIVE_NAME"
-          git archive --format=tar --prefix="$PACKAGE_NAME/" "$GITHUB_REF_NAME" | tar xf -
-          VERSION=${GITHUB_REF_NAME#v}
-          echo "Updating version to $VERSION in $PACKAGE_NAME/_meta.lua"
-          sed -i -E "s/(version\s*=\s*)[^,]+/\1\"${VERSION}\"/" "$PACKAGE_NAME/_meta.lua"
-          cat "$PACKAGE_NAME/_meta.lua"
-          if [ -f .releaseignore ]; then
-            # convert our .releaseignore to a zip compatible list
-            python3 -c "pkg='assistant.koplugin'; raw=[l.strip().rstrip('/') for l in open('.releaseignore') if (t:=l.strip()) and not t.startswith('#') and not t.startswith('!') and t.rstrip('/')]; open('/tmp/exclude.list','w').write('\n'.join([f'{pkg}/{p}\n{pkg}/{p}/*\n*/{p}\n*/{p}/*' for p in raw]) + f'\n{pkg}/.*\n*/.*\n.git/*\n')"
-            echo "exclude.list:"; cat /tmp/exclude.list; echo "---"
-            zip -r "$ARCHIVE_NAME" "$PACKAGE_NAME" -x@/tmp/exclude.list
-          else
-            zip -r "$ARCHIVE_NAME" "$PACKAGE_NAME"
-          fi
-          echo "Archive created: $ARCHIVE_NAME"
-
-      # Step 4: List files in the created archive for debugging purposes.
-      - name: List archive contents
-        run: unzip -l "$ARCHIVE_NAME"
-
-      # Step 5: Create a GitHub Release and upload the archive as a release asset.
-      - name: Create Release and Upload Asset
-        uses: softprops/action-gh-release@v3
+      - uses: actions/checkout@v5
         with:
-          prerelease: false
-          make_latest: true
-          # The files to upload as release assets.
-          files: ${{ env.ARCHIVE_NAME }}
+          ref: main
+          fetch-depth: 0
+      - name: Configure Git
+        run: |
+          echo "STATE=$RUNNER_TEMP/maintenance-state.json" >> "$GITHUB_ENV"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+      - name: Prepare candidate
+        id: prepare
+        env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          args=()
+          if [[ "$EVENT" != push ]]; then args+=(--sync); fi
+          python3 .github/scripts/maintain.py prepare --state "$STATE" "${args[@]}"
+      - name: Install official runtime and LuaLS
+        if: steps.prepare.outputs.active == 'true'
+        run: bash .github/scripts/setup-runtime.sh
+      - name: Validate candidate
+        if: steps.prepare.outputs.active == 'true'
+        run: |
+          set -o pipefail
+          python3 -m unittest discover -s .github/tests -v
+          ./test/run.sh | tee "$RUNNER_TEMP/unit-tests.log"
+          command -v lua-language-server
+          ./test/run_diagnose.sh | tee "$RUNNER_TEMP/diagnostics.log"
+          SDL_VIDEODRIVER=dummy ./test/runui.sh ui/markdown_render
+          SDL_VIDEODRIVER=dummy ./test/runui.sh ui/markdown_render_puremd
+      - name: Publish validated commit
+        if: steps.prepare.outputs.active == 'true'
+        run: python3 .github/scripts/maintain.py publish --state "$STATE" --output "$RUNNER_TEMP/release"
+      - name: Save failure evidence
+        if: failure()
+        run: |
+          git status --short > "$RUNNER_TEMP/git-status.txt"
+          git diff > "$RUNNER_TEMP/candidate.diff"
+          git bundle create "$RUNNER_TEMP/candidate.bundle" --all
+          git log -8 --oneline > "$RUNNER_TEMP/candidate-history.txt"
+          echo 'No unvalidated candidate was published. Inspect the artifact and rerun after resolving the failure.' >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: maintenance-${{ github.run_id }}-${{ github.run_attempt }}
+          if-no-files-found: ignore
+          path: |
+            ${{ runner.temp }}/maintenance-state.json
+            ${{ runner.temp }}/*.log
+            ${{ runner.temp }}/candidate.*
+            ${{ runner.temp }}/candidate-history.txt
+            ${{ runner.temp }}/git-status.txt
+            ${{ runner.temp }}/assistant_luaserver_log/
+            ${{ runner.temp }}/release/

@@ -176,7 +176,8 @@ local tests = {
         assert.isFalse(excluded("main.lua"))
         assert.isFalse(excluded("core/updater.lua"))
         assert.isFalse(excluded("api_handlers/openai.lua"))
-        assert.isFalse(excluded("configuration.lua"))
+        assert.isTrue(excluded("configuration.lua"))
+        assert.isTrue(excluded("apikeys.lua"))
         assert.isFalse(excluded("lib/libhoedown.so.3"))
     end),
 
