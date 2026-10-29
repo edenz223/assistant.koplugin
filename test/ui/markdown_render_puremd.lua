@@ -50,6 +50,13 @@ local mock_assistant = {
     querier = { provider_name = "test-provider", is_inited = function() return true end },
 }
 
+local function newline_page(minimalist)
+    local viewer = ResultViewer:new{
+        text = "First line\nSecond line\nThird line", assistant = mock_assistant }
+    viewer.minimalist = minimalist
+    return viewer:_renderMarkdown(), viewer:_buildCSS()
+end
+
 local BUBBLE = '<div class="user-bubble">What is the One Ring, and who carries it all the way to Mordor?</div>\n\n'
 local ANSWER = "Frodo Baggins carries the Ring to Mordor with Samwise Gamgee beside him."
 
@@ -79,8 +86,16 @@ shot.run({
                 local viewer = ResultViewer:new{ text = BUBBLE .. ANSWER .. "\n\n", assistant = mock_assistant }
                 return page(viewer:_renderMarkdown(), viewer:_buildCSS())
             end },
+            { name = "puremd_newlines_standard", build = function()
+                return page(newline_page(false))
+            end },
+            { name = "puremd_newlines_minimal", build = function()
+                return page(newline_page(true))
+            end },
         },
         verify = function(ctx)
+            ctx.check("minimalist prose preserves pure-Lua line breaks",
+                ctx.shots.puremd_newlines_minimal.ink_rows > 2 * ctx.shots.puremd_newlines_standard.ink_rows)
             local wrapped_html = MD(BUBBLE)
             ctx.check("the pure-Lua parser does wrap the container in a paragraph",
                 wrapped_html:find("<p>%s*<div class=\"user%-bubble\"") ~= nil,

@@ -207,6 +207,12 @@ table th {
 
 local JUSTIFY_CSS = "\nbody {\n    text-align: justify;\n}\n"
 
+local MINIMALIST_CSS = [[
+p, li {
+    white-space: pre-line;
+}
+]]
+
 -- Response Font: MuPDF registers font files, not family names, so the caller
 -- resolves the installed faces and build() emits the @font-face rules.
 -- Both @page and body carry the family (as upstream footnotewidget does).
@@ -226,10 +232,13 @@ end
 
 -- Full viewer CSS, shared by ResultViewer and NotebookViewer.
 -- build() with no opts returns just the grouped base below.
--- opts = { justified = bool, font = { family, faces }|nil }
+-- opts = { justified = bool, minimalist = bool, font = { family, faces }|nil }
 function M.build(opts)
     opts = opts or {}
     local css = BASE_CSS
+    if opts.minimalist then
+        css = css .. MINIMALIST_CSS
+    end
     if opts.justified then
         css = css .. JUSTIFY_CSS
     end

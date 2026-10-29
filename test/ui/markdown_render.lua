@@ -431,6 +431,36 @@ shot.run({
         end,
     },
 
+    {
+        name = "minimalist line breaks",
+        shots = {
+            { name = "newlines_standard", build = function()
+                return page("First line\nSecond line\nThird line")
+            end },
+            { name = "newlines_minimal", build = function()
+                switches.minimalist_mode = true
+                local widget = page("First line\nSecond line\nThird line")
+                switches.minimalist_mode = false
+                return widget
+            end },
+            { name = "list_standard", build = function()
+                return page("- First item\n  continued here\n- Second item")
+            end },
+            { name = "list_minimal", build = function()
+                switches.minimalist_mode = true
+                local widget = page("- First item\n  continued here\n- Second item")
+                switches.minimalist_mode = false
+                return widget
+            end },
+        },
+        verify = function(ctx)
+            ctx.check("minimalist prose preserves three lines",
+                ctx.shots.newlines_minimal.ink_rows > 2 * ctx.shots.newlines_standard.ink_rows)
+            ctx.check("minimalist lists preserve continuation line breaks",
+                ctx.shots.list_minimal.ink_rows > 1.2 * ctx.shots.list_standard.ink_rows)
+        end,
+    },
+
     -- 9. The real viewer window paints: title bar, page and both bubbles. A
     --    broken paint hook leaves the framebuffer empty, which no string
     --    assertion can see. The empty reply is the control: same window, same

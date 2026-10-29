@@ -1196,6 +1196,7 @@ function ResultViewer:_buildCSS()
   local justified = self.assistant.settings:readSetting("response_justified", false)
   return ViewerCSS.build({
     justified = justified,
+    minimalist = self.minimalist,
     font = resolveResponseFont(self.assistant.settings:readSetting("response_font_face")),
   })
 end
