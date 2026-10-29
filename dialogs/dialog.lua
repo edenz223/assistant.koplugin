@@ -26,6 +26,7 @@ local CheckButton = require("ui/widget/checkbutton")
 local ASUtils = require("utils/base")
 local TextUtils = require("utils/text")
 local DocUtils = require("utils/doc")
+local SentenceContext = require("utils/sentence_context")
 local NetUtils = require("utils/net")
 local Notebook = require("feature/notebook")
 local Conversation = require("core/conversation")
@@ -229,11 +230,10 @@ function AssistantDialog:_showResultViewer(highlightedText, message_history, tit
           viewer_title = Prompts.getDisplayText(user_question.text or "Custom Prompt",
             user_question.use_websearch or false,
             Prompts.isWebSearchEnabled(self.assistant.settings))
-          if include_book_context_for_followup
-              and user_question.use_book_context == true
-              and self.assistant.settings:readSetting("prepend_book_metadata", true) then
-            table.insert(message_history, self:_buildBookContextMessage(current_highlight))
+          if user_question.use_sentence_context == true or include_book_context_for_followup then
+            self:_appendPromptContext(message_history, current_highlight, user_question)
           end
+          viewer.message_history = message_history
 
           local _user = {
             role = "user",
@@ -290,6 +290,33 @@ function AssistantDialog:_showResultViewer(highlightedText, message_history, tit
   UIManager:show(result_viewer)
 end
 
+
+-- Sentence-only prompts take precedence over all automatic book context.
+-- Clear prior turns too: they may already contain pages or book-level text.
+function AssistantDialog:_appendPromptContext(message_history, highlighted_text, prompt_config)
+  if prompt_config.use_sentence_context == true then
+    for i = #message_history, 2, -1 do message_history[i] = nil end
+    local sentence
+    if self.sentence_context_highlight == highlighted_text then
+      sentence = self.sentence_context
+    else
+      sentence = SentenceContext.extract(self.assistant.ui, highlighted_text)
+      self.sentence_context_highlight = highlighted_text
+      self.sentence_context = sentence
+    end
+    if sentence and sentence ~= "" then
+      local msg = {
+        role = "user",
+        content = "Sentence containing the highlighted text (context only):\n```\n" .. sentence .. "\n```",
+      }
+      ASUtils.set_attr(msg, "is_context", true)
+      table.insert(message_history, msg)
+    end
+  elseif prompt_config.use_book_context == true
+      and self.assistant.settings:readSetting("prepend_book_metadata", true) then
+    table.insert(message_history, self:_buildBookContextMessage(highlighted_text))
+  end
+end
 
 function AssistantDialog:_buildBookContextMessage(highlighted_text)
   local book = self:_getBookContext()
@@ -602,7 +629,9 @@ function AssistantDialog:showAskDialog(highlightedText)
                 showDictionaryDialog(self.assistant, highlightedText, nil, "term_xray")
               else
                 local book_text_prompt = ""
-                if use_book_text_checkbox and use_book_text_checkbox.checked then
+                local prompt_config = Prompts.getMergedPrompts(self.assistant.config:getFeature("prompts"))[tab.idx]
+                if prompt_config.use_sentence_context ~= true
+                    and use_book_text_checkbox and use_book_text_checkbox.checked then
                   local use_chapter = use_chapter_checkbox and use_chapter_checkbox.checked
                   book_text_prompt = buildBookTextPrompt(use_chapter,
                       extractContextText(self.assistant, use_chapter))
@@ -844,10 +873,9 @@ function AssistantDialog:runPrompt(highlightedText, prompt_id, user_input)
     content = system_prompt,
   }}
 
-  if prompt_config.use_book_context == true
-      and self.assistant.settings:readSetting("prepend_book_metadata", true) then
-    table.insert(message_history, self:_buildBookContextMessage(highlightedText))
-  end
+  -- A new lookup must capture the current occurrence, even for the same word.
+  self.sentence_context_highlight, self.sentence_context = nil, nil
+  self:_appendPromptContext(message_history, highlightedText, prompt_config)
 
   local _user = {
     role = "user",
