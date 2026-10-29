@@ -1,4 +1,8 @@
 # Assistant: AI Helper Plugin for KOReader
+
+This fork maintains custom sentence context and minimalist reply line breaks.
+See [maintenance and updates](docs/MAINTENANCE.md) for the main-branch workflow.
+
 <!-- ALL-CONTRIBUTORS-BADGE:START - Do not remove or modify this section -->
 [![All Contributors](https://img.shields.io/badge/all_contributors-1-orange.svg?style=flat-square)](#contributors-)
 <!-- ALL-CONTRIBUTORS-BADGE:END -->

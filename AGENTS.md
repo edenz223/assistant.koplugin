@@ -73,12 +73,15 @@ Full flow, handlers, config, key files: `docs/ARCHITECTURE.md`.
 
 ## Git / Versioning
 
+- Canonical checkout: `/home/edenz/codes/assistant.koplugin`; see `docs/MAINTENANCE.md`.
 - `main`; Conventional Commits, one topic per commit. Commit directly when asked. Prefixes: `fix:` (defect), `refactor:` (behavior-preserving restructure), `add:` (new capability or tooling), `feat:` (user-visible feature), `test:` (tests only), `docs:` (documentation, including comment-only changes).
 - History rewrite: amend small same-topic follow-ups into the unpushed tip commit; once a commit is pushed, never rewrite it - append a new commit instead.
 - Subject line: imperative mood, lowercase first word, no trailing period (`fix: stop API connection tests failing on reasoning models`). Two facets of one change join with `;` (`add: fail closed on an unrecognized web-search key; one credential per tool`).
 - Body after a blank line, wrapped at ~76 columns: lead with **why** (the defect or rule behind the change), then what changed. Prose paragraphs for `fix:`/`add:`/`refactor:`/`feat:`; `- ` bullets when the commit covers several topics (`docs:`, `test:`). ASCII only (`->`, `-`, `...`).
-- `_meta.lua` holds `X.Y-dev`. Release: tag `vX.Y` on the matching commit; CI rewrites the packaged `_meta.lua` from the tag (repo stays `X.Y-dev`), then bump the repo to `X.(Y+1)-dev` and commit.
-- CI (`.github/workflows/release.yml`) builds the zip using `.releaseignore`, creates a GitHub pre-release, and runs **no tests**. `.releaseignore` already excludes `*.md`, `test/`, `docs/`, `.github/`, `l10n` sources (the OTA updater reads the same file).
+- One independent change per commit, including its tests and documentation. Squash unpushed same-topic follow-ups; never rewrite published history outside an explicitly authorized migration.
+- Releases use `vYYYY.M.D.N` (Asia/Taipei). Automation commits the matching `_meta.lua` version before tagging; source OTA and ZIP must have the same version. Do not bump back to an upstream `-dev` version after release.
+- `.github/workflows/release.yml` validates main changes and daily upstream merges before publishing. Run full Lua tests and diagnostics before committing; maintenance changes also require `python3 -m unittest discover -s .github/tests -v`.
+- Release CI requires LuaLS and runs both Markdown UI regressions. `.releaseignore` excludes development files and user credentials from ZIP and OTA installs.
 
 ## Translation
 

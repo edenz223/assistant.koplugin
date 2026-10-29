@@ -9,7 +9,7 @@ KOReader plugin adding AI assistant features: 10+ providers, OpenAI Responses AP
 ## Core
 
 - `main.lua` — slim plugin entry: init, dispatcher actions, on*/onClose/onFlushSettings entry points and config guard. Keeps only KOReader entry points; all other logic lives in owning modules and is invoked directly; no thin Assistant delegates. Where a top-level require would cycle (settings_menu<->provider/search/provider dialogs) or break headless loads (hooks/settings_menu), use function-local inline require following existing precedent. `feature/book_actions.lua` owns book features, identification and the FileManager long-press row; `core/hooks.lua` owns all KOReader monkey patches; `dialogs/settings_menu.lua` owns the main menu, provider dialog and help/about dialogs. Providers and web-search tools are added through `Registry.showProviderDialog` / `SearchRegistry.showWebSearchDialog`.
-- `_meta.lua` — version (`X.Y-dev`), manually bumped on `main` after a release tag; CI rewrites it from the tag during packaging.
+- `_meta.lua` — date version (`YYYY.M.D.N`), committed by release automation before tagging; source OTA and packaged versions are identical.
 - `core/querier.lua` (`Querier`) — loads handlers, drives stream/non-stream paths, runs the web-search tool loop (max 3 rounds feeding results back), and parses SSE into one unified format.
 - `core/tool_executor.lua` (`ToolExecutor`) — normalizes tool-calling across the `openai`/`anthropic`/`gemini` wire formats; loads enabled search tools from `SearchRegistry` at query time.
 - `core/exttools.lua` — search API clients (SerpAPI, Tavily, SearXNG, Exa).
