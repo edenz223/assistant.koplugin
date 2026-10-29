@@ -167,6 +167,15 @@ local function isVersionNewer(v1_str, v2_str)
     return false -- Versions are identical
 end
 
+local function getUpdateSources(assistant)
+  return {
+    check = assistant.config:getFeature("update_check_url")
+      or "https://api.github.com/repos/edenz223/assistant.koplugin/releases/latest",
+    download = assistant.config:getFeature("ota_github_url")
+      or "https://codeload.github.com/edenz223/assistant.koplugin",
+  }
+end
+
 local function checkForUpdates(assistant)
   if not assistant or not assistant.settings or not assistant.config then
     return
@@ -190,8 +199,7 @@ local function checkForUpdates(assistant)
   end
   assistant._update_check_running = true
 
-  local update_url = assistant.config:getFeature("update_check_url")
-    or "https://api.github.com/repos/omer-faruq/assistant.koplugin/releases/latest"
+  local update_url = getUpdateSources(assistant).check
 
   local parsed_data, err = NetUtils.fetchJSON(update_url,
       { ["Accept"] = "application/vnd.github.v3+json" },
@@ -228,8 +236,7 @@ end
 local function otaUpgrade(assistant, version)
   local PLUGIN_NAME = "assistant.koplugin"
 
-  local OTA_URL = assistant.config:getFeature("ota_github_url")
-    or "https://codeload.github.com/omer-faruq/assistant.koplugin"
+  local OTA_URL = getUpdateSources(assistant).download
   OTA_URL = OTA_URL:gsub("/+$", "")
 
   local REPO_REF = version:sub(1, 1) == "v" and "tags" or "heads"
@@ -519,6 +526,7 @@ local function getDefaultOtaInput(assistant)
 end
 
 return {
+  getUpdateSources = getUpdateSources,
   isVersionNewer = isVersionNewer,
   is_excluded = is_excluded,
   is_excluded_with = is_excluded_with,

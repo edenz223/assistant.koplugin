@@ -37,6 +37,26 @@ local tests = {
     -- isVersionNewer
     -- =========================================================================
 
+    test("update sources: fork defaults and explicit overrides", function()
+        local values = {}
+        local assistant = { config = { getFeature = function(self, key) return values[key] end } }
+        local sources = updater.getUpdateSources(assistant)
+        assert.equal("https://api.github.com/repos/edenz223/assistant.koplugin/releases/latest", sources.check)
+        assert.equal("https://codeload.github.com/edenz223/assistant.koplugin", sources.download)
+        values.update_check_url = "https://example.test/releases/latest"
+        values.ota_github_url = "https://example.test/source"
+        sources = updater.getUpdateSources(assistant)
+        assert.equal(values.update_check_url, sources.check)
+        assert.equal(values.ota_github_url, sources.download)
+    end),
+
+    test("date versions: revision, date rollover and old upstream version", function()
+        assert.isTrue(updater.isVersionNewer("2026.10.29.2", "2026.10.29.1"))
+        assert.isTrue(updater.isVersionNewer("2026.10.30.1", "2026.10.29.2"))
+        assert.isTrue(updater.isVersionNewer("2026.10.29.1", "1.22-dev"))
+        assert.isFalse(updater.isVersionNewer("2026.10.29.1", "2026.10.29.1"))
+    end),
+
     test("isVersionNewer: nil/empty returns false", function()
         assert.isFalse(updater.isVersionNewer(nil, "1.0"))
         assert.isFalse(updater.isVersionNewer("1.0", nil))
